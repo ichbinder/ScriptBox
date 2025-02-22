@@ -80,7 +80,7 @@ if [ -d "$TEMP_FILE" ]; then
 fi
 
 # Extract the hash and tmdbID from the ORIGINAL_FILENAME (expected format: hash--[[tmdbID]]<extension>)
-if [[ "$ORIGINAL_FILENAME" =~ ^(.*?)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
+if [[ "$ORIGINAL_FILENAME" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
     hash="${BASH_REMATCH[1]}"
     tmdbID="${BASH_REMATCH[2]}"
     extension="${BASH_REMATCH[3]}"
@@ -107,11 +107,14 @@ fi
 log_info "Renamed file to: $FINAL_FILE"
 log_info "Extracted metadata: hash=\"$hash\", tmdbID=$tmdbID"
 
+# Capitalize the first letter of SAB_CAT
+SAB_CAT_CAPITALIZED="${SAB_CAT^}"
+
 # Upload the file to the Hetzner Cloud S3 bucket using cURL with AWS Signature Version 4.
 log_info "Uploading file to bucket '$S3_BUCKET' at '$S3_ENDPOINT' using cURL..."
 
 # Construct the URL using the virtual-hosted-style as per Hetzner's documentation.
-URL="https://${S3_BUCKET}.${S3_ENDPOINT}/${newFileName}"
+URL="https://${S3_BUCKET}.${S3_ENDPOINT}/Media/${SAB_CAT_CAPITALIZED}/${newFileName}"
 
 curl -T "$FINAL_FILE" "$URL" \
   --user "${ACCESS_KEY}:${SECRET_KEY}" \
@@ -124,4 +127,4 @@ if [ $? -eq 0 ]; then
 else
     log_error "Failed to upload file '$newFileName' to bucket '$S3_BUCKET'."
     exit 1
-fi 
+fi
