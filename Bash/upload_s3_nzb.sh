@@ -1,19 +1,28 @@
 #!/bin/bash
-# This script renames the downloaded NZB file using the SABnzbd naming scheme and uploads it to a Hetzner Cloud S2 bucket with metadata.
+# This script renames the downloaded NZB file using the SABnzbd naming scheme and uploads it to a Hetzner Cloud S3 bucket with metadata.
 #
 # Expected environment variables provided by SABnzbd:
-#   NZBPP_DIRECTORY - Directory where the file should be stored
-#   NZBPP_FILENAME  - Final file name provided by SABnzbd (format: hash--[[tmdbID]]<extension>)
+#   SAB_COMPLETE_DIR - Directory where the file should be stored
+#   SAB_FINAL_NAME   - Final file name provided by SABnzbd (format: hash--[[tmdbID]]<extension>)
 #
-# Configuration for Hetzner Cloud S2 bucket:
+# Configuration for Hetzner Cloud S3 bucket:
 #   S3_BUCKET   - The target bucket name (e.g., your-bucket-name)
-#   S3_ENDPOINT - The S3 endpoint URL (e.g., https://s3.your-region.hetzner.cloud)
+#   S3_ENDPOINT - The S3 endpoint domain (e.g., fsn1.your-objectstorage.com)
+#
+# Additional configuration for cURL upload:
+#   ACCESS_KEY  - Your Object Storage access key
+#   SECRET_KEY  - Your Object Storage secret key
+#   REGION      - Storage region (e.g., fsn1)
 #
 # Usage:
-#   ./upload_script.sh /path/to/temporary_downloaded_file
+#   ./upload_s3_nzb.sh /path/to/temporary_downloaded_file
 #
-# The script extracts the hash and tmdbID from NZBPP_FILENAME, renames the temporary file to the new file name (using only the hash with the extension) 
-# and uploads it with metadata: {"hash": "<hash>", "tmdbID": <tmdbID>}.
+# The script extracts the hash and tmdbID from SAB_FINAL_NAME, renames the temporary file,
+# and uploads it with cURL using AWS Signature Version 4.
+#
+# Additional metadata is attached as HTTP headers:
+#   x-amz-meta-hash:   <hash>
+#   x-amz-meta-tmdbID: <tmdbID>
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 if [ -f "$DIR/.env" ]; then
@@ -23,8 +32,8 @@ if [ -f "$DIR/.env" ]; then
 fi
 
 # Logging functions: writes info to info.log and errors to error.log with a timestamp
-LOG_INFO="info.log"
-LOG_ERROR="error.log"
+LOG_INFO="$DIR/info.log"
+LOG_ERROR="$DIR/error.log"
 
 log_info() {
     echo "$(date +'%Y-%m-%d %H:%M:%S') INFO: $1" | tee -a "$LOG_INFO"
@@ -34,14 +43,15 @@ log_error() {
     echo "$(date +'%Y-%m-%d %H:%M:%S') ERROR: $1" | tee -a "$LOG_ERROR" >&2
 }
 
-# Ensure required environment variables are set
-if [ -z "$NZBPP_DIRECTORY" ] || [ -z "$NZBPP_FILENAME" ]; then
-    log_error "NZBPP_DIRECTORY and NZBPP_FILENAME environment variables must be set."
+# Ensure required environment variables are set for SABnzbd
+if [ -z "$SAB_COMPLETE_DIR" ] || [ -z "$SAB_FINAL_NAME" ]; then
+    log_error "SAB_COMPLETE_DIR and SAB_FINAL_NAME environment variables must be set."
     exit 1
 fi
 
-if [ -z "$S3_BUCKET" ] || [ -z "$S3_ENDPOINT" ]; then
-    log_error "S3_BUCKET and S3_ENDPOINT must be set."
+# Ensure required environment variables are set for Hetzner Object Storage
+if [ -z "$S3_BUCKET" ] || [ -z "$S3_ENDPOINT" ] || [ -z "$ACCESS_KEY" ] || [ -z "$SECRET_KEY" ] || [ -z "$REGION" ]; then
+    log_error "S3_BUCKET, S3_ENDPOINT, ACCESS_KEY, SECRET_KEY, and REGION must be set."
     exit 1
 fi
 
@@ -52,16 +62,16 @@ if [ -z "$1" ]; then
 fi
 
 TEMP_FILE="$1"
-TARGET_DIR="$NZBPP_DIRECTORY"
-ORIGINAL_FILENAME="$NZBPP_FILENAME"
+TARGET_DIR="$SAB_COMPLETE_DIR"
+ORIGINAL_FILENAME="$SAB_FINAL_NAME"
 
-# Extract the hash and tmdbID from the NZBPP_FILENAME (expected format: hash--[[tmdbID]]<extension>)
+# Extract the hash and tmdbID from the SAB_FINAL_NAME (expected format: hash--[[tmdbID]]<extension>)
 if [[ "$ORIGINAL_FILENAME" =~ ^(.*?)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
     hash="${BASH_REMATCH[1]}"
     tmdbID="${BASH_REMATCH[2]}"
     extension="${BASH_REMATCH[3]}"
 else
-    log_error "NZBPP_FILENAME does not match the expected pattern (hash--[[tmdbID]])."
+    log_error "SAB_FINAL_NAME does not match the expected pattern (hash--[[tmdbID]])."
     exit 1
 fi
 
@@ -83,9 +93,18 @@ fi
 log_info "Renamed file to: $FINAL_FILE"
 log_info "Extracted metadata: hash=\"$hash\", tmdbID=$tmdbID"
 
-# Upload the file to the Hetzner Cloud S2 bucket using AWS CLI with metadata
-log_info "Uploading file to bucket '$S3_BUCKET' at '$S3_ENDPOINT'..."
-aws --endpoint-url="$S3_ENDPOINT" s3api put-object --bucket "$S3_BUCKET" --key "$newFileName" --body "$FINAL_FILE" --metadata hash="$hash",tmdbID="$tmdbID"
+# Upload the file to the Hetzner Cloud S3 bucket using cURL with AWS Signature Version 4.
+log_info "Uploading file to bucket '$S3_BUCKET' at '$S3_ENDPOINT' using cURL..."
+
+# Construct the URL using the virtual-hosted-style as per Hetzner's documentation.
+URL="https://${S3_BUCKET}.${S3_ENDPOINT}/${newFileName}"
+
+curl -T "$FINAL_FILE" "$URL" \
+  --user "${ACCESS_KEY}:${SECRET_KEY}" \
+  --aws-sigv4 "aws:amz:${REGION}:s3" \
+  -H "x-amz-meta-hash: ${hash}" \
+  -H "x-amz-meta-tmdbID: ${tmdbID}"
+
 if [ $? -eq 0 ]; then
     log_info "File '$newFileName' uploaded successfully to bucket '$S3_BUCKET'."
 else
