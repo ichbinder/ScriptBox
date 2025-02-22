@@ -43,6 +43,9 @@ log_error() {
     echo "$(date +'%Y-%m-%d %H:%M:%S') ERROR: $1" | tee -a "$LOG_ERROR" >&2
 }
 
+log_info "SAB_COMPLETE_DIR: $SAB_COMPLETE_DIR"
+log_info "SAB_FINAL_NAME: $SAB_FINAL_NAME"
+
 # Ensure required environment variables are set for SABnzbd
 if [ -z "$SAB_COMPLETE_DIR" ] || [ -z "$SAB_FINAL_NAME" ]; then
     log_error "SAB_COMPLETE_DIR and SAB_FINAL_NAME environment variables must be set."
