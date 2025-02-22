@@ -47,7 +47,6 @@ log_info "SAB_COMPLETE_DIR: $SAB_COMPLETE_DIR"
 log_info "SAB_FINAL_NAME: $SAB_FINAL_NAME"
 log_info "SAB_CAT: ${SAB_CAT^}"
 log_info "SAB_FILENAME: $SAB_FILENAME"
-log_info "File: $1"
 
 # Ensure required environment variables are set for SABnzbd
 if [ -z "$SAB_COMPLETE_DIR" ] || [ -z "$SAB_FINAL_NAME" ]; then
@@ -61,76 +60,40 @@ if [ -z "$S3_BUCKET" ] || [ -z "$S3_ENDPOINT" ] || [ -z "$ACCESS_KEY" ] || [ -z 
     exit 1
 fi
 
-# Check if the temporary file parameter is provided
-if [ -z "$1" ]; then
-    log_error "Usage: $0 <path_to_temp_file>"
-    exit 1
-fi
-
-TEMP_FILE="$1"
-
-# Determine TARGET_DIR and ORIGINAL_FILENAME:
-# If SAB_FINAL_NAME contains a "/" assume it's a full path, else take SAB_FINAL_NAME relative to SAB_COMPLETE_DIR.
-if [[ "$SAB_FINAL_NAME" == */* ]]; then
-    TARGET_DIR=$(dirname "$SAB_FINAL_NAME")
-    ORIGINAL_FILENAME=$(basename "$SAB_FINAL_NAME")
-else
-    TARGET_DIR="$SAB_COMPLETE_DIR"
-    ORIGINAL_FILENAME="$SAB_FINAL_NAME"
-fi
-
-# Falls TEMP_FILE ein Verzeichnis ist (z.B. wenn SABnzbd einen Ordner erstellt hat),
-# dann nutzen wir das übergeordnete Verzeichnis des TEMP_FILE als TARGET_DIR.
-if [ -d "$TEMP_FILE" ]; then
-    TARGET_DIR=$(dirname "$TEMP_FILE")
-fi
-
-# Extract the hash and tmdbID from the ORIGINAL_FILENAME (expected format: hash--[[tmdbID]]<extension>)
-if [[ "$ORIGINAL_FILENAME" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
-    hash="${BASH_REMATCH[1]}"
-    tmdbID="${BASH_REMATCH[2]}"
-    extension="${BASH_REMATCH[3]}"
-else
-    log_error "SAB_FINAL_NAME does not match the expected pattern (hash--[[tmdbID]])."
-    exit 1
-fi
-
-# Construct the new file name. Use the extracted hash and preserve the extension if available.
-newFileName="$hash"
-if [ -n "$extension" ]; then
-    newFileName="${hash}${extension}"
-fi
-
-FINAL_FILE="$TARGET_DIR/$newFileName"
-
-# Rename the temporary file (or directory) to the final file/directory.
-mv "$TEMP_FILE" "$FINAL_FILE"
-if [ $? -ne 0 ]; then
-    log_error "Error renaming file from '$TEMP_FILE' to '$FINAL_FILE'"
-    exit 1
-fi
-
-log_info "Renamed file to: $FINAL_FILE"
-log_info "Extracted metadata: hash=\"$hash\", tmdbID=$tmdbID"
-
-# Capitalize the first letter of SAB_CAT
-SAB_CAT_CAPITALIZED="${SAB_CAT^}"
-
-# Upload the file to the Hetzner Cloud S3 bucket using cURL with AWS Signature Version 4.
-log_info "Uploading file to bucket '$S3_BUCKET' at '$S3_ENDPOINT' using cURL..."
-
-# Construct the URL using the virtual-hosted-style as per Hetzner's documentation.
-URL="https://${S3_BUCKET}.${S3_ENDPOINT}/Media/${SAB_CAT_CAPITALIZED}/${newFileName}"
-
-curl -T "$FINAL_FILE" "$URL" \
-  --user "${ACCESS_KEY}:${SECRET_KEY}" \
-  --aws-sigv4 "aws:amz:${REGION}:s3" \
-  -H "x-amz-meta-hash: ${hash}" \
-  -H "x-amz-meta-tmdbID: ${tmdbID}"
-
-if [ $? -eq 0 ]; then
-    log_info "File '$newFileName' uploaded successfully to bucket '$S3_BUCKET'."
-else
-    log_error "Failed to upload file '$newFileName' to bucket '$S3_BUCKET'."
-    exit 1
-fi
+# Iterate over all files in SAB_COMPLETE_DIR and process them
+for SOURCE_FILE in "$SAB_COMPLETE_DIR"/*; do
+    [ -e "$SOURCE_FILE" ] || continue
+    ORIGINAL_FILENAME=$(basename "$SOURCE_FILE")
+    if [[ "$ORIGINAL_FILENAME" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
+         hash="${BASH_REMATCH[1]}"
+         tmdbID="${BASH_REMATCH[2]}"
+         extension="${BASH_REMATCH[3]}"
+         newFileName="$hash"
+         if [ -n "$extension" ]; then
+             newFileName="${hash}${extension}"
+         fi
+         FINAL_FILE="$SAB_COMPLETE_DIR/$newFileName"
+         mv "$SOURCE_FILE" "$FINAL_FILE"
+         if [ $? -ne 0 ]; then
+             log_error "Error renaming file from '$SOURCE_FILE' to '$FINAL_FILE'"
+             continue
+         fi
+         log_info "Renamed file to: $FINAL_FILE"
+         log_info "Extracted metadata: hash=\"$hash\", tmdbID=$tmdbID"
+         SAB_CAT_CAPITALIZED="${SAB_CAT^}"
+         log_info "Uploading file to bucket '$S3_BUCKET' at '$S3_ENDPOINT' using cURL..."
+         URL="https://${S3_BUCKET}.${S3_ENDPOINT}/Media/${SAB_CAT_CAPITALIZED}/${newFileName}"
+         curl -T "$FINAL_FILE" "$URL" \
+            --user "${ACCESS_KEY}:${SECRET_KEY}" \
+            --aws-sigv4 "aws:amz:${REGION}:s3" \
+            -H "x-amz-meta-hash: ${hash}" \
+            -H "x-amz-meta-tmdbID: ${tmdbID}"
+         if [ $? -eq 0 ]; then
+             log_info "File '$newFileName' uploaded successfully to bucket '$S3_BUCKET'."
+         else
+             log_error "Failed to upload file '$newFileName' to bucket '$S3_BUCKET'."
+         fi
+    else
+         log_error "File '$ORIGINAL_FILENAME' does not match expected pattern. Skipping."
+    fi
+done
