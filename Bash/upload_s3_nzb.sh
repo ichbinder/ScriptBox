@@ -1,5 +1,5 @@
 #!/bin/bash
-# This script renames the downloaded NZB file using the SABnzbd naming scheme and uploads it to a Hetzner Cloud S3 bucket with metadata.
+# This script renames the downloaded NZB file (or directory) using the SABnzbd naming scheme and uploads it to a Hetzner Cloud S3 bucket with metadata.
 #
 # Expected environment variables provided by SABnzbd:
 #   SAB_COMPLETE_DIR - Directory where the file should be stored
@@ -15,9 +15,9 @@
 #   REGION      - Storage region (e.g., fsn1)
 #
 # Usage:
-#   ./upload_s3_nzb.sh /path/to/temporary_downloaded_file
+#   ./upload_s3_nzb.sh /path/to/temporary_downloaded_file_or_directory
 #
-# The script extracts the hash and tmdbID from SAB_FINAL_NAME, renames the temporary file,
+# The script extracts the hash and tmdbID from SAB_FINAL_NAME, renames the temporary file/directory,
 # and uploads it with cURL using AWS Signature Version 4.
 #
 # Additional metadata is attached as HTTP headers:
@@ -63,13 +63,20 @@ fi
 
 TEMP_FILE="$1"
 
-# If SAB_FINAL_NAME contains a "/" assume it's a full path, else use SAB_COMPLETE_DIR and SAB_FINAL_NAME as given.
+# Determine TARGET_DIR and ORIGINAL_FILENAME:
+# If SAB_FINAL_NAME contains a "/" assume it's a full path, else take SAB_FINAL_NAME relative to SAB_COMPLETE_DIR.
 if [[ "$SAB_FINAL_NAME" == */* ]]; then
     TARGET_DIR=$(dirname "$SAB_FINAL_NAME")
     ORIGINAL_FILENAME=$(basename "$SAB_FINAL_NAME")
 else
     TARGET_DIR="$SAB_COMPLETE_DIR"
     ORIGINAL_FILENAME="$SAB_FINAL_NAME"
+fi
+
+# Falls TEMP_FILE ein Verzeichnis ist (z.B. wenn SABnzbd einen Ordner erstellt hat),
+# dann nutzen wir das übergeordnete Verzeichnis des TEMP_FILE als TARGET_DIR.
+if [ -d "$TEMP_FILE" ]; then
+    TARGET_DIR=$(dirname "$TEMP_FILE")
 fi
 
 # Extract the hash and tmdbID from the ORIGINAL_FILENAME (expected format: hash--[[tmdbID]]<extension>)
@@ -90,7 +97,7 @@ fi
 
 FINAL_FILE="$TARGET_DIR/$newFileName"
 
-# Rename the temporary file to the final file.
+# Rename the temporary file (or directory) to the final file/directory.
 mv "$TEMP_FILE" "$FINAL_FILE"
 if [ $? -ne 0 ]; then
     log_error "Error renaming file from '$TEMP_FILE' to '$FINAL_FILE'"
