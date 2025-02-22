@@ -45,7 +45,7 @@ log_error() {
 
 log_info "SAB_COMPLETE_DIR: $SAB_COMPLETE_DIR"
 log_info "SAB_FINAL_NAME: $SAB_FINAL_NAME"
-log_info "SAB_CAT: $SAB_CAT"
+log_info "SAB_CAT: ${SAB_CAT^}"
 log_info "SAB_FILENAME: $SAB_FILENAME"
 log_info "File: $1"
 
