@@ -81,8 +81,10 @@ for SOURCE_FILE in "$SAB_COMPLETE_DIR"/*; do
          log_info "Renamed file to: $FINAL_FILE"
          log_info "Extracted metadata: hash=\"$hash\", tmdbID=$tmdbID"
          SAB_CAT_CAPITALIZED="${SAB_CAT^}"
+         # URL-encode SAB_CAT_CAPITALIZED to escape [ and ]
+         SAB_CAT_URL=$(echo "$SAB_CAT_CAPITALIZED" | sed 's/\[/\%5B/g; s/\]/\%5D/g')
          log_info "Uploading file to bucket '$S3_BUCKET' at '$S3_ENDPOINT' using cURL..."
-         URL="https://${S3_BUCKET}.${S3_ENDPOINT}/Media/${SAB_CAT_CAPITALIZED}/${newFileName}"
+         URL="https://${S3_BUCKET}.${S3_ENDPOINT}/Media/${SAB_CAT_URL}/${newFileName}"
          curl -T "$FINAL_FILE" "$URL" \
             --user "${ACCESS_KEY}:${SECRET_KEY}" \
             --aws-sigv4 "aws:amz:${REGION}:s3" \
