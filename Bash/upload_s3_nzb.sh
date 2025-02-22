@@ -3,7 +3,7 @@
 #
 # Expected environment variables provided by SABnzbd:
 #   SAB_COMPLETE_DIR - Directory where the file should be stored
-#   SAB_FINAL_NAME   - Final file name provided by SABnzbd (format: hash--[[tmdbID]]<extension>)
+#   SAB_FINAL_NAME   - Final file name provided by SABnzbd (format: hash--[[tmdbID]]<extension>) or full path
 #
 # Configuration for Hetzner Cloud S3 bucket:
 #   S3_BUCKET   - The target bucket name (e.g., your-bucket-name)
@@ -62,10 +62,17 @@ if [ -z "$1" ]; then
 fi
 
 TEMP_FILE="$1"
-TARGET_DIR="$SAB_COMPLETE_DIR"
-ORIGINAL_FILENAME="$SAB_FINAL_NAME"
 
-# Extract the hash and tmdbID from the SAB_FINAL_NAME (expected format: hash--[[tmdbID]]<extension>)
+# If SAB_FINAL_NAME contains a "/" assume it's a full path, else use SAB_COMPLETE_DIR and SAB_FINAL_NAME as given.
+if [[ "$SAB_FINAL_NAME" == */* ]]; then
+    TARGET_DIR=$(dirname "$SAB_FINAL_NAME")
+    ORIGINAL_FILENAME=$(basename "$SAB_FINAL_NAME")
+else
+    TARGET_DIR="$SAB_COMPLETE_DIR"
+    ORIGINAL_FILENAME="$SAB_FINAL_NAME"
+fi
+
+# Extract the hash and tmdbID from the ORIGINAL_FILENAME (expected format: hash--[[tmdbID]]<extension>)
 if [[ "$ORIGINAL_FILENAME" =~ ^(.*?)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
     hash="${BASH_REMATCH[1]}"
     tmdbID="${BASH_REMATCH[2]}"
@@ -83,7 +90,7 @@ fi
 
 FINAL_FILE="$TARGET_DIR/$newFileName"
 
-# Rename the temporary file to the final file
+# Rename the temporary file to the final file.
 mv "$TEMP_FILE" "$FINAL_FILE"
 if [ $? -ne 0 ]; then
     log_error "Error renaming file from '$TEMP_FILE' to '$FINAL_FILE'"
