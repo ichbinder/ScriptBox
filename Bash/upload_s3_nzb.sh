@@ -107,12 +107,79 @@ if [[ "$ORIGINAL_FILENAME" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
     URL="https://${S3_ENDPOINT}/${S3_BUCKET}/Media/${SAB_CAT_CAPITALIZED}/$newFileName"
     log_info "Uploading file to URL: $URL"
     log_info "FINAL_FILE: $FINAL_FILE"
-    curl "$URL" \
-       -T "$FINAL_FILE" \
-       --user "${ACCESS_KEY}:${SECRET_KEY}" \
-       --aws-sigv4 "aws:amz:${REGION}:s3" \
-       -H "x-amz-meta-hash: ${hash}" \
-       -H "x-amz-meta-tmdbID: ${tmdbID}"
+
+    # Get file size
+    FILE_SIZE=$(stat -f%z "$FINAL_FILE")
+    CHUNK_SIZE=$((64*1024*1024)) # 64MB chunks
+    TOTAL_CHUNKS=$(( (FILE_SIZE + CHUNK_SIZE - 1) / CHUNK_SIZE ))
+    
+    if [ $FILE_SIZE -lt $CHUNK_SIZE ]; then
+        # Small file, upload directly
+        curl "$URL" \
+            -T "$FINAL_FILE" \
+            --user "${ACCESS_KEY}:${SECRET_KEY}" \
+            --aws-sigv4 "aws:amz:${REGION}:s3" \
+            -H "x-amz-meta-hash: ${hash}" \
+            -H "x-amz-meta-tmdbID: ${tmdbID}"
+    else
+        # Large file, use multipart upload
+        # Initialize multipart upload
+        UPLOAD_ID=$(curl -X POST "${URL}?uploads=" \
+            --user "${ACCESS_KEY}:${SECRET_KEY}" \
+            --aws-sigv4 "aws:amz:${REGION}:s3" \
+            -H "x-amz-meta-hash: ${hash}" \
+            -H "x-amz-meta-tmdbID: ${tmdbID}" \
+            -s | grep -o '<UploadId>[^<]*</UploadId>' | sed 's/<UploadId>\(.*\)<\/UploadId>/\1/')
+        
+        # Upload parts in parallel (max 5 parallel uploads)
+        ETAGS=()
+        for ((i=1; i<=TOTAL_CHUNKS; i++)); do
+            OFFSET=$(( (i-1) * CHUNK_SIZE ))
+            if [ $i -eq $TOTAL_CHUNKS ]; then
+                LENGTH=$(( FILE_SIZE - OFFSET ))
+            else
+                LENGTH=$CHUNK_SIZE
+            fi
+            
+            # Upload part and store ETag (in background for parallelization)
+            {
+                ETAG=$(dd if="$FINAL_FILE" bs=$CHUNK_SIZE skip=$((i-1)) count=1 2>/dev/null | \
+                    curl -X PUT "${URL}?partNumber=${i}&uploadId=${UPLOAD_ID}" \
+                    --user "${ACCESS_KEY}:${SECRET_KEY}" \
+                    --aws-sigv4 "aws:amz:${REGION}:s3" \
+                    --data-binary @- \
+                    -H "Content-Length: ${LENGTH}" \
+                    -i -s | grep ETag | cut -d'"' -f2)
+                echo "${i}:${ETAG}" >> "/tmp/${UPLOAD_ID}.etags"
+            } &
+            
+            # Limit parallel uploads
+            if [ $(jobs -r | wc -l) -ge 5 ]; then
+                wait -n
+            fi
+        done
+        
+        # Wait for all uploads to complete
+        wait
+        
+        # Build completion XML
+        echo '<?xml version="1.0" encoding="UTF-8"?><CompleteMultipartUpload>' > "/tmp/${UPLOAD_ID}.xml"
+        sort -n -t: -k1 "/tmp/${UPLOAD_ID}.etags" | while IFS=: read -r part etag; do
+            echo "<Part><PartNumber>${part}</PartNumber><ETag>${etag}</ETag></Part>" >> "/tmp/${UPLOAD_ID}.xml"
+        done
+        echo '</CompleteMultipartUpload>' >> "/tmp/${UPLOAD_ID}.xml"
+        
+        # Complete multipart upload
+        curl -X POST "${URL}?uploadId=${UPLOAD_ID}" \
+            --user "${ACCESS_KEY}:${SECRET_KEY}" \
+            --aws-sigv4 "aws:amz:${REGION}:s3" \
+            -H "Content-Type: application/xml" \
+            --data-binary @"/tmp/${UPLOAD_ID}.xml"
+        
+        # Cleanup temporary files
+        rm -f "/tmp/${UPLOAD_ID}.etags" "/tmp/${UPLOAD_ID}.xml"
+    fi
+
     if [ $? -eq 0 ]; then
         log_info "File '$newFileName' uploaded successfully to bucket '$S3_BUCKET'."
     else
