@@ -102,6 +102,8 @@ for SOURCE_FILE in "$SAB_COMPLETE_DIR"/*; do
          newFileNameUrl=$(echo "$newFileName" | sed 's/[^a-zA-Z0-9.-]/\\&/g')
          log_info "Uploading file to bucket '$S3_BUCKET' at '$S3_ENDPOINT' using cURL..."
          URL="https://${S3_ENDPOINT}/${S3_BUCKET}/Media/${SAB_CAT_CAPITALIZED}/${newFileNameUrl}"
+         log_info "Uploading file to URL: $URL"
+         log_info "FINAL_FILE: $FINAL_FILE"
          curl "$URL" \
             -T "$FINAL_FILE" \
             --user "${ACCESS_KEY}:${SECRET_KEY}" \
