@@ -60,10 +60,27 @@ if [ -z "$S3_BUCKET" ] || [ -z "$S3_ENDPOINT" ] || [ -z "$ACCESS_KEY" ] || [ -z 
     exit 1
 fi
 
+# Rename the download directory if it matches the pattern
+DOWNLOAD_DIR=$(basename "$SAB_COMPLETE_DIR")
+if [[ "$DOWNLOAD_DIR" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\]$ ]]; then
+    hash="${BASH_REMATCH[1]}"
+    tmdbID="${BASH_REMATCH[2]}"
+    PARENT_DIR=$(dirname "$SAB_COMPLETE_DIR")
+    NEW_DIR="$PARENT_DIR/$hash"
+    mv "$SAB_COMPLETE_DIR" "$NEW_DIR"
+    if [ $? -ne 0 ]; then
+        log_error "Error renaming directory from '$SAB_COMPLETE_DIR' to '$NEW_DIR'"
+        exit 1
+    fi
+    log_info "Renamed download directory to: $NEW_DIR"
+    SAB_COMPLETE_DIR="$NEW_DIR"
+fi
+
 # Iterate over all files in SAB_COMPLETE_DIR and process them
 for SOURCE_FILE in "$SAB_COMPLETE_DIR"/*; do
     [ -e "$SOURCE_FILE" ] || continue
     ORIGINAL_FILENAME=$(basename "$SOURCE_FILE")
+    
     if [[ "$ORIGINAL_FILENAME" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
          hash="${BASH_REMATCH[1]}"
          tmdbID="${BASH_REMATCH[2]}"
