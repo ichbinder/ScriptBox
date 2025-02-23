@@ -77,7 +77,7 @@ if [[ "$DOWNLOAD_DIR" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\]$ ]]; then
 fi
 
 # Find the media file in SAB_COMPLETE_DIR (recursively)
-SOURCE_FILE=$(find "$SAB_COMPLETE_DIR" -type f -name "*--[[*]]*" | head -n 1)
+SOURCE_FILE=$(find "$SAB_COMPLETE_DIR" -type f -name "*--\[\[*\]\]*" | head -n 1)
 if [ -z "$SOURCE_FILE" ]; then
     log_error "No media file found in '$SAB_COMPLETE_DIR'"
     exit 1
