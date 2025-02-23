@@ -76,46 +76,48 @@ if [[ "$DOWNLOAD_DIR" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\]$ ]]; then
     SAB_COMPLETE_DIR="$NEW_DIR"
 fi
 
-# Iterate over all files in SAB_COMPLETE_DIR and process them
-for SOURCE_FILE in "$SAB_COMPLETE_DIR"/*; do
-    [ -e "$SOURCE_FILE" ] || continue
-    ORIGINAL_FILENAME=$(basename "$SOURCE_FILE")
-    
-    if [[ "$ORIGINAL_FILENAME" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
-         hash="${BASH_REMATCH[1]}"
-         tmdbID="${BASH_REMATCH[2]}"
-         extension="${BASH_REMATCH[3]}"
-         newFileName="$hash"
-         if [ -n "$extension" ]; then
-             newFileName="${hash}${extension}"
-         fi
-         FINAL_FILE="$SAB_COMPLETE_DIR/$newFileName"
-         mv "$SOURCE_FILE" "$FINAL_FILE"
-         if [ $? -ne 0 ]; then
-             log_error "Error renaming file from '$SOURCE_FILE' to '$FINAL_FILE'"
-             continue
-         fi
-         log_info "Renamed file to: $FINAL_FILE"
-         log_info "Extracted metadata: hash=\"$hash\", tmdbID=$tmdbID"
-         SAB_CAT_CAPITALIZED="${SAB_CAT^}"
-         # URL-encode the filename for the URL
-         newFileNameUrl=$(echo "$newFileName" | sed 's/[^a-zA-Z0-9.-]/\\&/g')
-         log_info "Uploading file to bucket '$S3_BUCKET' at '$S3_ENDPOINT' using cURL..."
-         URL="https://${S3_ENDPOINT}/${S3_BUCKET}/Media/${SAB_CAT_CAPITALIZED}/${newFileNameUrl}"
-         log_info "Uploading file to URL: $URL"
-         log_info "FINAL_FILE: $FINAL_FILE"
-         curl "$URL" \
-            -T "$FINAL_FILE" \
-            --user "${ACCESS_KEY}:${SECRET_KEY}" \
-            --aws-sigv4 "aws:amz:${REGION}:s3" \
-            -H "x-amz-meta-hash: ${hash}" \
-            -H "x-amz-meta-tmdbID: ${tmdbID}"
-         if [ $? -eq 0 ]; then
-             log_info "File '$newFileName' uploaded successfully to bucket '$S3_BUCKET'."
-         else
-             log_error "Failed to upload file '$newFileName' to bucket '$S3_BUCKET'."
-         fi
-    else
-         log_error "File '$ORIGINAL_FILENAME' does not match expected pattern. Skipping."
+# Find the media file in SAB_COMPLETE_DIR (recursively)
+SOURCE_FILE=$(find "$SAB_COMPLETE_DIR" -type f -name "*--[[*]]*" | head -n 1)
+if [ -z "$SOURCE_FILE" ]; then
+    log_error "No media file found in '$SAB_COMPLETE_DIR'"
+    exit 1
+fi
+
+ORIGINAL_FILENAME=$(basename "$SOURCE_FILE")
+if [[ "$ORIGINAL_FILENAME" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
+    hash="${BASH_REMATCH[1]}"
+    tmdbID="${BASH_REMATCH[2]}"
+    extension="${BASH_REMATCH[3]}"
+    newFileName="$hash"
+    if [ -n "$extension" ]; then
+        newFileName="${hash}${extension}"
     fi
-done
+    FINAL_FILE="$SAB_COMPLETE_DIR/$newFileName"
+    mv "$SOURCE_FILE" "$FINAL_FILE"
+    if [ $? -ne 0 ]; then
+        log_error "Error renaming file from '$SOURCE_FILE' to '$FINAL_FILE'"
+        exit 1
+    fi
+    log_info "Renamed file to: $FINAL_FILE"
+    log_info "Extracted metadata: hash=\"$hash\", tmdbID=$tmdbID"
+    SAB_CAT_CAPITALIZED="${SAB_CAT^}"
+    # URL-encode the filename for the URL
+    # newFileNameUrl=$(echo "$newFileName" | sed 's/[^a-zA-Z0-9.-]/\\&/g')
+    log_info "Uploading file to bucket '$S3_BUCKET' at '$S3_ENDPOINT' using cURL..."
+    URL="https://${S3_ENDPOINT}/${S3_BUCKET}/Media/${SAB_CAT_CAPITALIZED}/$newFileName"
+    log_info "Uploading file to URL: $URL"
+    log_info "FINAL_FILE: $FINAL_FILE"
+    curl "$URL" \
+       -T "$FINAL_FILE" \
+       --user "${ACCESS_KEY}:${SECRET_KEY}" \
+       --aws-sigv4 "aws:amz:${REGION}:s3" \
+       -H "x-amz-meta-hash: ${hash}" \
+       -H "x-amz-meta-tmdbID: ${tmdbID}"
+    if [ $? -eq 0 ]; then
+        log_info "File '$newFileName' uploaded successfully to bucket '$S3_BUCKET'."
+    else
+        log_error "Failed to upload file '$newFileName' to bucket '$S3_BUCKET'."
+    fi
+else
+    log_error "File '$ORIGINAL_FILENAME' does not match expected pattern. Skipping."
+fi
