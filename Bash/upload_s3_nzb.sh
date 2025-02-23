@@ -84,8 +84,9 @@ for SOURCE_FILE in "$SAB_COMPLETE_DIR"/*; do
          # URL-encode the filename for the URL
          newFileNameUrl=$(echo "$newFileName" | sed 's/[^a-zA-Z0-9.-]/\\&/g')
          log_info "Uploading file to bucket '$S3_BUCKET' at '$S3_ENDPOINT' using cURL..."
-         URL="https://${S3_BUCKET}.${S3_ENDPOINT}/Media/${SAB_CAT_CAPITALIZED}/${newFileNameUrl}"
-         curl -T "$FINAL_FILE" "$URL" \
+         URL="https://${S3_ENDPOINT}/${S3_BUCKET}/Media/${SAB_CAT_CAPITALIZED}/${newFileNameUrl}"
+         curl "$URL" \
+            -T "$FINAL_FILE" \
             --user "${ACCESS_KEY}:${SECRET_KEY}" \
             --aws-sigv4 "aws:amz:${REGION}:s3" \
             -H "x-amz-meta-hash: ${hash}" \
