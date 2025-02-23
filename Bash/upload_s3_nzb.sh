@@ -108,8 +108,8 @@ if [[ "$ORIGINAL_FILENAME" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
     log_info "Uploading file to URL: $URL"
     log_info "FINAL_FILE: $FINAL_FILE"
 
-    # Get file size (compatible with Linux)
-    FILE_SIZE=$(stat -c%s "$FINAL_FILE")
+    # Get file size using wc -c
+    FILE_SIZE=$(wc -c < "$FINAL_FILE")
     if [ $? -ne 0 ]; then
         log_error "Failed to get file size"
         exit 1
@@ -192,14 +192,14 @@ if [[ "$ORIGINAL_FILENAME" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
         echo '</CompleteMultipartUpload>' >> "/tmp/${UPLOAD_ID}.xml"
         
         # Complete multipart upload
-        COMPLETE_RESPONSE=$(curl -X POST "${URL}?uploadId=${UPLOAD_ID}" \
+        COMPLETE_RESPONSE=$(curl -X POST "${URL}?uploadId=${UPLOAD_ID}" -v \
             --user "${ACCESS_KEY}:${SECRET_KEY}" \
             --aws-sigv4 "aws:amz:${REGION}:s3" \
             -H "Content-Type: application/xml" \
             --data-binary @"/tmp/${UPLOAD_ID}.xml" -s)
 
         # Check if completion was successful
-        if echo "$COMPLETE_RESPONSE" | grep -q "<Error>"; then
+        if echo "$COMPLETE_RESPONSE" | grep -q "<Error\|error>"; then
             log_error "Failed to complete multipart upload: $COMPLETE_RESPONSE"
             UPLOAD_STATUS=1
         else
