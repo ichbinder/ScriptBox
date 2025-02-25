@@ -115,14 +115,20 @@ if [[ "$ORIGINAL_FILENAME" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
     aws s3 cp "$FINAL_FILE" "$S3_PATH" \
         --endpoint-url "https://$S3_ENDPOINT" \
         --metadata "hash=$hash,tmdbID=$tmdbID" \
-        --expected-size $(stat -c%s "$FINAL_FILE" 2>/dev/null || wc -c < "$FINAL_FILE") \
         --only-show-errors
-    UPLOAD_STATUS=$?
 
-    if [ $UPLOAD_STATUS -eq 0 ]; then
-        log_info "File '$newFileName' uploaded successfully to bucket '$S3_BUCKET'."
-    else
-        log_error "Failed to upload file '$newFileName' to bucket '$S3_BUCKET'."
+    # Wenn der Upload fehlschlägt, versuche es mit expliziten Multipart-Parametern
+    if [ $? -ne 0 ]; then
+        log_info "First upload attempt failed. Trying with explicit multipart configuration..."
+        aws s3 cp "$FINAL_FILE" "$S3_PATH" \
+            --endpoint-url "https://$S3_ENDPOINT" \
+            --metadata "hash=$hash,tmdbID=$tmdbID" \
+            --only-show-errors \
+            --profile "default" \
+            --no-progress \
+            --recursive \
+            --sse \
+            --content-type "application/octet-stream"
     fi
 else
     log_error "File '$ORIGINAL_FILENAME' does not match expected pattern. Skipping."
