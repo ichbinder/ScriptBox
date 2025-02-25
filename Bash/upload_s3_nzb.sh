@@ -101,114 +101,23 @@ if [[ "$ORIGINAL_FILENAME" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
     log_info "Renamed file to: $FINAL_FILE"
     log_info "Extracted metadata: hash=\"$hash\", tmdbID=$tmdbID"
     SAB_CAT_CAPITALIZED="${SAB_CAT^}"
-    # URL-encode the filename for the URL
-    # newFileNameUrl=$(echo "$newFileName" | sed 's/[^a-zA-Z0-9.-]/\\&/g')
-    log_info "Uploading file to bucket '$S3_BUCKET' at '$S3_ENDPOINT' using cURL..."
-    URL="https://${S3_ENDPOINT}/${S3_BUCKET}/Media/${SAB_CAT_CAPITALIZED}/$newFileName"
-    log_info "Uploading file to URL: $URL"
+    log_info "Uploading file to bucket '$S3_BUCKET' at '$S3_ENDPOINT' using AWS CLI..."
+    S3_PATH="s3://${S3_BUCKET}/Media/${SAB_CAT_CAPITALIZED}/$newFileName"
+    log_info "Uploading file to S3 path: $S3_PATH"
     log_info "FINAL_FILE: $FINAL_FILE"
 
-    # Get file size using wc -c
-    FILE_SIZE=$(wc -c < "$FINAL_FILE")
-    if [ $? -ne 0 ]; then
-        log_error "Failed to get file size"
-        exit 1
-    fi
-
-    CHUNK_SIZE=$((64*1024*1024)) # 64MB chunks
-    TOTAL_CHUNKS=$(( (FILE_SIZE + CHUNK_SIZE - 1) / CHUNK_SIZE ))
-
-    log_info "File size: $FILE_SIZE bytes, will be split into $TOTAL_CHUNKS chunks"
-
-    if [ "$FILE_SIZE" -lt "$CHUNK_SIZE" ]; then
-        # Small file, upload directly
-        curl "$URL" \
-            -T "$FINAL_FILE" \
-            --user "${ACCESS_KEY}:${SECRET_KEY}" \
-            --aws-sigv4 "aws:amz:${REGION}:s3" \
-            -H "x-amz-meta-hash: ${hash}" \
-            -H "x-amz-meta-tmdbID: ${tmdbID}"
-        UPLOAD_STATUS=$?
-    else
-        # Large file, use multipart upload
-        # Initialize multipart upload
-        UPLOAD_ID=$(curl -X POST "${URL}?uploads=" \
-            --user "${ACCESS_KEY}:${SECRET_KEY}" \
-            --aws-sigv4 "aws:amz:${REGION}:s3" \
-            -H "x-amz-meta-hash: ${hash}" \
-            -H "x-amz-meta-tmdbID: ${tmdbID}" \
-            -s | grep -o '<UploadId>[^<]*</UploadId>' | sed 's/<UploadId>\(.*\)<\/UploadId>/\1/')
-
-        if [ -z "$UPLOAD_ID" ]; then
-            log_error "Failed to initialize multipart upload"
-            exit 1
-        fi
-
-        log_info "Initialized multipart upload with ID: $UPLOAD_ID"
-        
-        # Upload parts in parallel (max 5 parallel uploads)
-        > "/tmp/${UPLOAD_ID}.etags"
-        for ((i=1; i<=TOTAL_CHUNKS; i++)); do
-            OFFSET=$(( (i-1) * CHUNK_SIZE ))
-            if [ $i -eq $TOTAL_CHUNKS ]; then
-                LENGTH=$(( FILE_SIZE - OFFSET ))
-            else
-                LENGTH=$CHUNK_SIZE
-            fi
-            
-            # Upload part and store ETag (in background for parallelization)
-            {
-                ETAG=$(dd if="$FINAL_FILE" bs="$CHUNK_SIZE" skip=$((i-1)) count=1 2>/dev/null | \
-                    curl -X PUT "${URL}?partNumber=${i}&uploadId=${UPLOAD_ID}" \
-                    --user "${ACCESS_KEY}:${SECRET_KEY}" \
-                    --aws-sigv4 "aws:amz:${REGION}:s3" \
-                    --data-binary @- \
-                    -H "Content-Length: ${LENGTH}" \
-                    -i -s | grep ETag | cut -d'"' -f2)
-                echo "${i}:${ETAG}" >> "/tmp/${UPLOAD_ID}.etags"
-                log_info "Uploaded part $i/$TOTAL_CHUNKS"
-            } &
-            
-            # Limit parallel uploads
-            if [ $(jobs -r | wc -l) -ge 5 ]; then
-                wait -n
-            fi
-        done
-        
-        # Wait for all uploads to complete
-        wait
-
-        # Check if all parts were uploaded successfully
-        if [ $(wc -l < "/tmp/${UPLOAD_ID}.etags") -ne $TOTAL_CHUNKS ]; then
-            log_error "Not all parts were uploaded successfully"
-            exit 1
-        fi
-        
-        # Build completion XML
-        echo '<?xml version="1.0" encoding="UTF-8"?><CompleteMultipartUpload>' > "/tmp/${UPLOAD_ID}.xml"
-        sort -n -t: -k1 "/tmp/${UPLOAD_ID}.etags" | while IFS=: read -r part etag; do
-            echo "<Part><PartNumber>${part}</PartNumber><ETag>${etag}</ETag></Part>" >> "/tmp/${UPLOAD_ID}.xml"
-        done
-        echo '</CompleteMultipartUpload>' >> "/tmp/${UPLOAD_ID}.xml"
-        
-        # Complete multipart upload
-        COMPLETE_RESPONSE=$(curl -X POST "${URL}?uploadId=${UPLOAD_ID}" -v \
-            --user "${ACCESS_KEY}:${SECRET_KEY}" \
-            --aws-sigv4 "aws:amz:${REGION}:s3" \
-            -H "Content-Type: application/xml" \
-            --data-binary @"/tmp/${UPLOAD_ID}.xml" -s)
-
-        # Check if completion was successful
-        if echo "$COMPLETE_RESPONSE" | grep -q "<Error\|error>"; then
-            log_error "Failed to complete multipart upload: $COMPLETE_RESPONSE"
-            UPLOAD_STATUS=1
-        else
-            UPLOAD_STATUS=0
-        fi
-        
-        # Cleanup temporary files
-        rm -f "/tmp/${UPLOAD_ID}.etags" "/tmp/${UPLOAD_ID}.xml"
-    fi
+    # Configure AWS CLI (without writing to disk, using environment variables)
+    export AWS_ACCESS_KEY_ID="$ACCESS_KEY"
+    export AWS_SECRET_ACCESS_KEY="$SECRET_KEY"
+    export AWS_DEFAULT_REGION="$REGION" 
+    
+    # Use aws-cli for upload with metadata and parallel options
+    aws s3 cp "$FINAL_FILE" "$S3_PATH" \
+        --endpoint-url "https://$S3_ENDPOINT" \
+        --metadata "hash=$hash,tmdbID=$tmdbID" \
+        --expected-size $(stat -c%s "$FINAL_FILE" 2>/dev/null || wc -c < "$FINAL_FILE") \
+        --only-show-errors
+    UPLOAD_STATUS=$?
 
     if [ $UPLOAD_STATUS -eq 0 ]; then
         log_info "File '$newFileName' uploaded successfully to bucket '$S3_BUCKET'."
