@@ -193,6 +193,20 @@ if [[ "$SAB_FINAL_NAME" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
     # Report success or failure
     if [ $UPLOAD_STATUS -eq 0 ]; then
         log_info "File '$newFileName' uploaded successfully to bucket '$S3_BUCKET'."
+        
+        # Delete the source directory after successful upload
+        log_info "Deleting source directory '$SAB_COMPLETE_DIR' after successful upload..."
+        set +e  # Disable exit on error temporarily
+        rm -rf "$SAB_COMPLETE_DIR"
+        DELETE_STATUS=$?
+        set -e  # Re-enable exit on error
+        
+        if [ $DELETE_STATUS -eq 0 ]; then
+            log_info "Source directory '$SAB_COMPLETE_DIR' successfully deleted."
+        else
+            log_error "Failed to delete source directory '$SAB_COMPLETE_DIR'. Status: $DELETE_STATUS"
+            # Not exiting with error as the upload was successful
+        fi
     else
         log_error "Failed to upload file '$newFileName' to bucket '$S3_BUCKET'. Status: $UPLOAD_STATUS"
         exit $UPLOAD_STATUS
