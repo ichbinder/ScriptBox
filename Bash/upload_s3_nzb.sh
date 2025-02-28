@@ -1,4 +1,3 @@
-#!/bin/bash
 # This script renames the downloaded NZB file (or directory) using the SABnzbd naming scheme and uploads it to a Hetzner Cloud S3 bucket with metadata.
 #
 # Expected environment variables provided by SABnzbd:
@@ -17,14 +16,15 @@
 # Usage:
 #   ./upload_s3_nzb.sh /path/to/temporary_downloaded_file_or_directory
 #
-# The script extracts the hash and tmdbID from SAB_FINAL_NAME, renames the temporary file/directory,
-# and uploads it with cURL using AWS Signature Version 4.
+# The script finds the largest file in the download directory, extracts the hash and tmdbID from SAB_FINAL_NAME,
+# renames the file, and uploads it with AWS CLI using proper authentication.
 #
-# Additional metadata is attached as HTTP headers:
-#   x-amz-meta-hash:   <hash>
-#   x-amz-meta-tmdbID: <tmdbID>
+# Additional metadata is attached:
+#   hash:   <hash>
+#   tmdbID: <tmdbID>
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
 if [ -f "$DIR/.env" ]; then
     set -o allexport
     source "$DIR/.env"
@@ -76,28 +76,40 @@ if [[ "$DOWNLOAD_DIR" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\]$ ]]; then
     SAB_COMPLETE_DIR="$NEW_DIR"
 fi
 
-# Find the media file in SAB_COMPLETE_DIR (recursively)
-SOURCE_FILE=$(find "$SAB_COMPLETE_DIR" -type f -name "*--\[\[*\]\]*" | head -n 1)
+# Find the largest file in SAB_COMPLETE_DIR (recursively)
+log_info "Finding largest file in '$SAB_COMPLETE_DIR'"
+SOURCE_FILE=$(find "$SAB_COMPLETE_DIR" -type f -not -path "*/\.*" | xargs du -s 2>/dev/null | sort -rn | head -n 1 | cut -f2-)
+
 if [ -z "$SOURCE_FILE" ]; then
-    log_error "No media file found in '$SAB_COMPLETE_DIR'"
+    log_error "No files found in '$SAB_COMPLETE_DIR'"
     exit 1
 fi
 
-ORIGINAL_FILENAME=$(basename "$SOURCE_FILE")
-if [[ "$ORIGINAL_FILENAME" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
+log_info "Largest file found: $SOURCE_FILE ($(du -h "$SOURCE_FILE" | cut -f1))"
+
+# Extract hash and tmdbID from SAB_FINAL_NAME instead of the filename
+if [[ "$SAB_FINAL_NAME" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
     hash="${BASH_REMATCH[1]}"
     tmdbID="${BASH_REMATCH[2]}"
-    extension="${BASH_REMATCH[3]}"
-    newFileName="$hash"
+    
+    # Get the extension from the source file
+    ORIGINAL_FILENAME=$(basename "$SOURCE_FILE")
+    extension="${ORIGINAL_FILENAME##*.}"
     if [ -n "$extension" ]; then
-        newFileName="${hash}${extension}"
+        extension=".$extension"
     fi
+    
+    newFileName="${hash}${extension}"
     FINAL_FILE="$SAB_COMPLETE_DIR/$newFileName"
+    
+    log_info "Renaming largest file from '$SOURCE_FILE' to '$FINAL_FILE'"
     mv "$SOURCE_FILE" "$FINAL_FILE"
+    
     if [ $? -ne 0 ]; then
         log_error "Error renaming file from '$SOURCE_FILE' to '$FINAL_FILE'"
         exit 1
     fi
+    
     log_info "Renamed file to: $FINAL_FILE"
     log_info "Extracted metadata: hash=\"$hash\", tmdbID=$tmdbID"
     SAB_CAT_CAPITALIZED="${SAB_CAT^}"
@@ -131,5 +143,5 @@ if [[ "$ORIGINAL_FILENAME" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
         log_error "Failed to upload file '$newFileName' to bucket '$S3_BUCKET'. Status: $UPLOAD_STATUS"
     fi
 else
-    log_error "File '$ORIGINAL_FILENAME' does not match expected pattern. Skipping."
-fi
+    log_error "SAB_FINAL_NAME '$SAB_FINAL_NAME' does not match expected pattern. Skipping."
+fi 
