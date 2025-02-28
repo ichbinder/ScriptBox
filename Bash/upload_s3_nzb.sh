@@ -202,5 +202,5 @@ else
     exit 1
 fi
 
-log_info "==================== SCRIPT COMPLETED SUCCESSFULLY ===================="
+log_info "===== SCRIPT COMPLETED SUCCESSFULLY ====="
 exit 0 
