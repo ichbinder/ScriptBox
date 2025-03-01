@@ -60,6 +60,9 @@ log_info "SAB_FILENAME: $SAB_FILENAME"
 log_info "Running as user: $(whoami)"
 log_info "Current directory: $(pwd)"
 
+# Store the original directory path to track even after renaming
+DIRECTORY_TO_DELETE=""
+
 # Ensure required environment variables are set for SABnzbd
 if [ -z "$SAB_COMPLETE_DIR" ] || [ -z "$SAB_FINAL_NAME" ]; then
     log_error "SAB_COMPLETE_DIR and/or SAB_FINAL_NAME environment variables are not set"
@@ -113,7 +116,12 @@ if [[ "$DOWNLOAD_DIR" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\]$ ]]; then
         exit 1
     fi
     log_info "Renamed download directory to: $NEW_DIR"
+    # Store this as the directory to delete later
+    DIRECTORY_TO_DELETE="$NEW_DIR"
     SAB_COMPLETE_DIR="$NEW_DIR"
+else
+    # If we didn't rename, use the original directory for deletion
+    DIRECTORY_TO_DELETE="$SAB_COMPLETE_DIR"
 fi
 
 # Find the largest file in SAB_COMPLETE_DIR (recursively)
@@ -195,16 +203,16 @@ if [[ "$SAB_FINAL_NAME" =~ ^([A-Za-z0-9]+)--\[\[([0-9]+)\]\](\..+)?$ ]]; then
         log_info "File '$newFileName' uploaded successfully to bucket '$S3_BUCKET'."
         
         # Delete the source directory after successful upload
-        log_info "Deleting source directory '$SAB_COMPLETE_DIR' after successful upload..."
+        log_info "Deleting source directory '$DIRECTORY_TO_DELETE' after successful upload..."
         set +e  # Disable exit on error temporarily
-        rm -rf "$SAB_COMPLETE_DIR"
+        rm -rf "$DIRECTORY_TO_DELETE"
         DELETE_STATUS=$?
         set -e  # Re-enable exit on error
         
         if [ $DELETE_STATUS -eq 0 ]; then
-            log_info "Source directory '$SAB_COMPLETE_DIR' successfully deleted."
+            log_info "Source directory '$DIRECTORY_TO_DELETE' successfully deleted."
         else
-            log_error "Failed to delete source directory '$SAB_COMPLETE_DIR'. Status: $DELETE_STATUS"
+            log_error "Failed to delete source directory '$DIRECTORY_TO_DELETE'. Status: $DELETE_STATUS"
             # Not exiting with error as the upload was successful
         fi
     else
